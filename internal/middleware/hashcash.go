@@ -93,7 +93,7 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 
 		currentTime := time.Now().Unix()
 		if currentTime-pow.Challenge.Timestamp > h.tokenTtl.Milliseconds() {
-			return nil, fmt.Errorf("challange is outdated")
+			return nil, fmt.Errorf("challenge is outdated")
 		}
 
 		expectedToken, err := h.createToken(dto.ChallengeDto{
@@ -106,7 +106,7 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 		}
 
 		if !hmac.Equal([]byte(expectedToken), []byte(pow.Token)) {
-			return nil, fmt.Errorf("wrong challenge")
+			return nil, fmt.Errorf("wrong token")
 		}
 
 		combined := pow.Challenge.Salt + fmt.Sprintf("%d", pow.Challenge.Timestamp) + pow.Nonce

@@ -6,15 +6,19 @@ import (
 	"hashcash/internal/pkg/env"
 	"log"
 	"net/http"
+	"time"
 )
 
 func main() {
 	env.LoadEnv()
-	serverUrl := env.GetEnv("POW_SERVER_URL", "localhost")
+	serverUrl := env.GetEnv("POW_SERVER_HOST", "")
 	serverPort := env.GetEnv("POW_SERVER_PORT", "8080")
 	clientPort := env.GetEnv("POW_CLIENT_PORT", "8081")
-
-	c := client.NewClient(serverUrl, serverPort)
+	pingTimeout, err := time.ParseDuration(env.GetEnv("PING_TIMEOUT", "100ms"))
+	if err != nil {
+		log.Fatalf("couldn't parse pingTimeout %v", err)
+	}
+	c := client.NewClient(serverUrl, serverPort, pingTimeout)
 
 	handler := quote.New(c)
 

@@ -7,13 +7,16 @@ import (
 	"hashcash/internal/pkg/env"
 	"hashcash/internal/server"
 	"hashcash/internal/service/secret_key_provider"
-	word_of_wisdom2 "hashcash/internal/service/word_of_wisdom"
-	"log"
+	word_of_wisdom_service "hashcash/internal/service/word_of_wisdom"
+
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type app struct {
@@ -25,6 +28,10 @@ func New() *app {
 
 func (a app) Run() error {
 	env.LoadEnv()
+
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
 	port := env.GetEnv("SERVER_PORT", "8080")
 	filePath := env.GetEnv("WORD_OF_WISDOM_SOURCE", "word_of_wisdom")
 	difficult, err := strconv.Atoi(env.GetEnv("CHALLENGE_DIFFICULT", "5"))
@@ -36,10 +43,14 @@ func (a app) Run() error {
 	if err != nil {
 		return fmt.Errorf("couldn't parse token ttl %v", err)
 	}
-	tcpServer := server.NewServer(port)
+	connectionDeadline, err := time.ParseDuration(env.GetEnv("CONNECTION_DEADLINE", "100ms"))
+	if err != nil {
+		return fmt.Errorf("couldn't parse connectionDeadline %v", err)
+	}
+	tcpServer := server.NewServer(port, connectionDeadline)
 	keyProvider := secret_key_provider.New()
 	powMiddleware := middleware.New(keyProvider, tokenTtl, difficult)
-	wordOfWisdomService, err := word_of_wisdom2.New(filePath)
+	wordOfWisdomService, err := word_of_wisdom_service.New(filePath)
 	if err != nil {
 		return fmt.Errorf("couldn't create a word of wisdom service %v", err)
 	}
@@ -49,7 +60,9 @@ func (a app) Run() error {
 
 	go func() {
 		if err := tcpServer.Start(); err != nil {
-			log.Fatalf("couldn't start a server on the port %s, %v", port, err)
+			log.Fatal().
+				Err(err).
+				Msg("couldn't start a server on the port " + port)
 		}
 	}()
 

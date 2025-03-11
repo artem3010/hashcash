@@ -10,6 +10,9 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type MessageHandler func(payload []byte) (response []byte, err error)
@@ -17,18 +20,20 @@ type MessageHandler func(payload []byte) (response []byte, err error)
 type Middleware func(MessageHandler) MessageHandler
 
 type Server struct {
-	Addr     string
-	listener net.Listener
-	done     chan struct{}
-	wg       sync.WaitGroup
-	handlers map[string]MessageHandler
+	Addr               string
+	listener           net.Listener
+	done               chan struct{}
+	wg                 sync.WaitGroup
+	handlers           map[string]MessageHandler
+	connectionDeadline time.Duration
 }
 
-func NewServer(addr string) *Server {
+func NewServer(addr string, connectionDeadline time.Duration) *Server {
 	return &Server{
-		Addr:     ":" + addr,
-		done:     make(chan struct{}),
-		handlers: make(map[string]MessageHandler),
+		Addr:               ":" + addr,
+		done:               make(chan struct{}),
+		handlers:           make(map[string]MessageHandler),
+		connectionDeadline: connectionDeadline,
 	}
 }
 
@@ -42,7 +47,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("server started at", s.Addr)
+	log.Info().Msg("server started at " + s.Addr)
 
 	s.wg.Add(1)
 	go s.acceptLoop()
@@ -58,7 +63,7 @@ func (s *Server) acceptLoop() {
 			case <-s.done:
 				return
 			default:
-				fmt.Println("couldn't set a connection:", err)
+				log.Err(err).Msg("couldn't set a connection")
 				continue
 			}
 		}
@@ -70,11 +75,17 @@ func (s *Server) acceptLoop() {
 func (s *Server) readLoop(conn net.Conn) {
 	defer s.wg.Done()
 	reader := bufio.NewReader(conn)
+
+	err := conn.SetDeadline(time.Now().Add(s.connectionDeadline))
+	if err != nil {
+		log.Err(err).Msg("couldn't set a deadline")
+		return
+	}
 	for {
 		data, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err != io.EOF {
-				fmt.Println("couldn't read data:", err)
+				log.Err(err).Msg("couldn't read data")
 			}
 			break
 		}
@@ -82,11 +93,13 @@ func (s *Server) readLoop(conn net.Conn) {
 		if len(data) == 0 {
 			continue
 		}
+		log.Info().Msg("Received request, processing: " + string(data))
 		resp := s.dispatchMessage(conn, data)
 		if len(resp) > 0 {
+			log.Info().Msg("Sending response: " + string(resp))
 			_, err := conn.Write(append(resp, '\n'))
 			if err != nil {
-				fmt.Println("couldn't send a response:", err)
+				log.Err(err).Msg("couldn't send a response:")
 				break
 			}
 		}
@@ -96,11 +109,15 @@ func (s *Server) readLoop(conn net.Conn) {
 
 func (s *Server) dispatchMessage(conn net.Conn, data []byte) []byte {
 
-	remoteAddr := conn.RemoteAddr().String()
-	ip, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		ip = remoteAddr
+	if string(data) == "PING" {
+		return wrapResponse(0, []byte("PONG"), nil)
 	}
+
+	remoteAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return wrapResponse(1, nil, ptr.Ptr("couldn't get an ip"))
+	}
+	ip := remoteAddr.IP.String()
 
 	var payload dto.PowPayload
 	if err := json.Unmarshal(data, &payload); err != nil {

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-type cachedPoW struct {
+type CachedPow struct {
 	Challenge  dto.ChallengeDto
 	Token      string
 	Nonce      string
@@ -22,16 +22,41 @@ type cachedPoW struct {
 }
 
 type Client struct {
-	Addr      string
-	cachedPow *cachedPoW
-	cacheMu   sync.Mutex
+	Addr        string
+	CachedPow   *CachedPow
+	CacheMu     sync.Mutex
+	ReadTimeout time.Duration
 }
 
-func NewClient(url, port string) *Client {
+func NewClient(url, port string, pingTimeout time.Duration) *Client {
 	return &Client{
-		Addr:      url + ":" + port,
-		cachedPow: nil,
+		Addr:        url + ":" + port,
+		CachedPow:   nil,
+		ReadTimeout: pingTimeout,
 	}
+}
+
+func (c *Client) pingServer(conn net.Conn) error {
+	_, err := fmt.Fprintf(conn, "PING\n")
+	if err != nil {
+		return fmt.Errorf("couldn't send ping: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	resp, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("couldn't read pong: %v", err)
+	}
+	resp = strings.TrimSpace(resp)
+
+	var sr dto.ServerResponse
+	if err := json.Unmarshal([]byte(resp), &sr); err != nil {
+		return fmt.Errorf("couldn't unmarshal pong response: %v", err)
+	}
+	if sr.Code != 0 || sr.Data == nil || *sr.Data != "PONG" {
+		return fmt.Errorf("unexpected pong response: %s", resp)
+	}
+	return nil
 }
 
 func (c *Client) requestChallenge(conn net.Conn) (*dto.ChallengeResponseDto, error) {
@@ -51,6 +76,7 @@ func (c *Client) requestChallenge(conn net.Conn) (*dto.ChallengeResponseDto, err
 	}
 
 	reader := bufio.NewReader(conn)
+
 	respStr, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read an response: %v", err)
@@ -112,8 +138,15 @@ func expiredTtl(timestamp int64, ttl time.Duration) bool {
 
 func (c *Client) GetQuote() (string, error) {
 	conn, err := net.Dial("tcp", c.Addr)
+
 	if err != nil {
 		return "", fmt.Errorf("couldn't conncect: %s, %v", c.Addr, err)
+	}
+
+	deadline := time.Now().Add(c.ReadTimeout)
+	err = conn.SetDeadline(deadline)
+	if err != nil {
+		return "", fmt.Errorf("couldn't set a deadline: %v", err)
 	}
 	defer func(conn net.Conn) {
 		err := conn.Close()
@@ -122,48 +155,87 @@ func (c *Client) GetQuote() (string, error) {
 		}
 	}(conn)
 
-	if c.cachedPow != nil && !expiredTtl(c.cachedPow.Challenge.Timestamp, c.cachedPow.TokenTtlMs) {
-		c.cacheMu.Lock()
-		cp := c.cachedPow
-		c.cacheMu.Unlock()
+	if c.CachedPow != nil && !expiredTtl(c.CachedPow.Challenge.Timestamp, c.CachedPow.TokenTtlMs) {
+		c.CacheMu.Lock()
+		cp := c.CachedPow
+		c.CacheMu.Unlock()
+
+		if c.pingServer(conn) != nil {
+			conn, err = net.Dial("tcp", c.Addr)
+			if err != nil {
+				return "", fmt.Errorf("couldn't conncect: %s, %v", c.Addr, err)
+			}
+		}
 		return c.sendFinalRequest(conn, cp)
+	}
+
+	if c.pingServer(conn) != nil {
+		conn, err = net.Dial("tcp", c.Addr)
+		if err != nil {
+			return "", fmt.Errorf("couldn't conncect: %s, %v", c.Addr, err)
+		}
 	}
 	chResp, err := c.requestChallenge(conn)
 	if err != nil {
-		return "", err
+		if c.pingServer(conn) != nil {
+			conn, err = net.Dial("tcp", c.Addr)
+			if err != nil {
+				return "", fmt.Errorf("couldn't conncect: %s, %v", c.Addr, err)
+			}
+		}
+		chResp, err = c.requestChallenge(conn)
+		if err != nil {
+			return "", err
+		}
 	}
 	nonce, err := computePoW(chResp.Challenge, chResp.TokenTtlMs)
 	if err != nil {
 		return "", err
 	}
-	newCached := &cachedPoW{
+	newCached := &CachedPow{
 		Challenge:  chResp.Challenge,
 		Token:      chResp.Token,
 		Nonce:      nonce,
 		TokenTtlMs: time.Duration(chResp.TokenTtlMs) * time.Millisecond,
 	}
 
-	c.cacheMu.Lock()
-	if c.cachedPow == nil {
-		c.cachedPow = newCached
+	c.CacheMu.Lock()
+	if c.CachedPow == nil {
+		c.CachedPow = newCached
 	}
-	cp := c.cachedPow
-	c.cacheMu.Unlock()
+	cp := c.CachedPow
+	c.CacheMu.Unlock()
 
+	if c.pingServer(conn) != nil {
+		conn, err = net.Dial("tcp", c.Addr)
+		if err != nil {
+			return "", fmt.Errorf("couldn't conncect: %s, %v", c.Addr, err)
+		}
+	}
+	retries := 0
 	resp, err := c.sendFinalRequest(conn, cp)
-	if err != nil {
-		return "", err
+	for ; err != nil && retries < 4; retries++ {
+		resp, err = c.sendFinalRequest(conn, cp)
 	}
+	if len(resp) == 0 || err != nil {
+		return "", fmt.Errorf("couldn't send a request, %v", err)
+	}
+	return c.convertResponse(resp)
+}
 
+func (c *Client) convertResponse(resp string) (string, error) {
 	var serverResp dto.ServerResponse
 	if err := json.Unmarshal([]byte(resp), &serverResp); err != nil {
 		return "", fmt.Errorf("couldn't unmarshal a response: %v", err)
 	}
 	if serverResp.Code == 1 {
-		c.cacheMu.Lock()
-		c.cachedPow = nil
-		c.cacheMu.Unlock()
-		return "", fmt.Errorf("server error %v, ", serverResp.Error)
+		c.CacheMu.Lock()
+		c.CachedPow = nil
+		c.CacheMu.Unlock()
+		if serverResp.Error != nil {
+			return "", fmt.Errorf("server error: %s", *serverResp.Error)
+		}
+		return "", fmt.Errorf("server returned error")
 	}
 
 	if serverResp.Data == nil {
@@ -172,7 +244,7 @@ func (c *Client) GetQuote() (string, error) {
 	return resp, nil
 }
 
-func (c *Client) sendFinalRequest(conn net.Conn, cp *cachedPoW) (string, error) {
+func (c *Client) sendFinalRequest(conn net.Conn, cp *CachedPow) (string, error) {
 	fullPayload := dto.PowPayload{
 		Method:    "getQuote",
 		Challenge: cp.Challenge,
@@ -193,5 +265,5 @@ func (c *Client) sendFinalRequest(conn net.Conn, cp *cachedPoW) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("couldn't read a response: %v", err)
 	}
-	return strings.TrimSpace(finalRespStr), nil
+	return c.convertResponse(strings.TrimSpace(finalRespStr))
 }
