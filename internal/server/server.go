@@ -75,7 +75,7 @@ func (s *Server) acceptLoop() {
 func (s *Server) readLoop(conn net.Conn) {
 	defer s.wg.Done()
 	reader := bufio.NewReader(conn)
-
+	//set deadline
 	err := conn.SetDeadline(time.Now().Add(s.connectionDeadline))
 	if err != nil {
 		log.Err(err).Msg("couldn't set a deadline")
@@ -93,10 +93,10 @@ func (s *Server) readLoop(conn net.Conn) {
 		if len(data) == 0 {
 			continue
 		}
-		log.Info().Msg("Received request, processing: " + string(data))
+		log.Debug().Msg("Received request, processing: " + string(data))
 		resp := s.dispatchMessage(conn, data)
 		if len(resp) > 0 {
-			log.Info().Msg("Sending response: " + string(resp))
+			log.Debug().Msg("Sending response: " + string(resp))
 			_, err := conn.Write(append(resp, '\n'))
 			if err != nil {
 				log.Err(err).Msg("couldn't send a response:")

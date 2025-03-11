@@ -36,6 +36,7 @@ func NewClient(url, port string, pingTimeout time.Duration) *Client {
 	}
 }
 
+// pingServer send ping and require pong, otherwise returns error
 func (c *Client) pingServer(conn net.Conn) error {
 	_, err := fmt.Fprintf(conn, "PING\n")
 	if err != nil {
@@ -59,6 +60,7 @@ func (c *Client) pingServer(conn net.Conn) error {
 	return nil
 }
 
+// requestChallenge request PoW challenge
 func (c *Client) requestChallenge(conn net.Conn) (*dto.ChallengeResponseDto, error) {
 	initialPayload := dto.PowPayload{
 		Method: "getQuote",
@@ -154,12 +156,13 @@ func (c *Client) GetQuote() (string, error) {
 
 		}
 	}(conn)
-
+	// use cache since PoW result is valid for TTL period
 	if c.CachedPow != nil && !expiredTtl(c.CachedPow.Challenge.Timestamp, c.CachedPow.TokenTtlMs) {
 		c.CacheMu.Lock()
 		cp := c.CachedPow
 		c.CacheMu.Unlock()
-
+		//before each request do ping
+		// TODO move this interaction to another package
 		if c.pingServer(conn) != nil {
 			conn, err = net.Dial("tcp", c.Addr)
 			if err != nil {
@@ -169,6 +172,8 @@ func (c *Client) GetQuote() (string, error) {
 		return c.sendFinalRequest(conn, cp)
 	}
 
+	//before each request do ping
+	// TODO move this interaction to another package
 	if c.pingServer(conn) != nil {
 		conn, err = net.Dial("tcp", c.Addr)
 		if err != nil {
@@ -177,6 +182,8 @@ func (c *Client) GetQuote() (string, error) {
 	}
 	chResp, err := c.requestChallenge(conn)
 	if err != nil {
+		//before each request do ping
+		// TODO move this interaction to another package
 		if c.pingServer(conn) != nil {
 			conn, err = net.Dial("tcp", c.Addr)
 			if err != nil {
@@ -206,6 +213,8 @@ func (c *Client) GetQuote() (string, error) {
 	cp := c.CachedPow
 	c.CacheMu.Unlock()
 
+	//before each request do ping
+	// TODO move this interaction to another package
 	if c.pingServer(conn) != nil {
 		conn, err = net.Dial("tcp", c.Addr)
 		if err != nil {
@@ -214,6 +223,7 @@ func (c *Client) GetQuote() (string, error) {
 	}
 	retries := 0
 	resp, err := c.sendFinalRequest(conn, cp)
+	//todo move retries to another package
 	for ; err != nil && retries < 4; retries++ {
 		resp, err = c.sendFinalRequest(conn, cp)
 	}

@@ -83,6 +83,7 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 			return nil, fmt.Errorf("coudn't define an ip")
 		}
 
+		//if no token - generate a task
 		if strings.TrimSpace(pow.Token) == "" {
 			challengeResp, err := h.generateChallengeResponse(pow.Ip)
 			if err != nil {
@@ -91,11 +92,13 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 			return challengeResp, nil
 		}
 
+		//if challenge is outdated returns error
 		currentTime := time.Now().Unix()
 		if currentTime-pow.Challenge.Timestamp > h.tokenTtl.Milliseconds() {
 			return nil, fmt.Errorf("challenge is outdated")
 		}
 
+		//create a token to compare with client token
 		expectedToken, err := h.createToken(dto.ChallengeDto{
 			Salt:       pow.Challenge.Salt,
 			Timestamp:  pow.Challenge.Timestamp,
@@ -105,10 +108,12 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 			return nil, fmt.Errorf("couldn't create a token: %v", err)
 		}
 
+		//compare tokens
 		if !hmac.Equal([]byte(expectedToken), []byte(pow.Token)) {
 			return nil, fmt.Errorf("wrong token")
 		}
 
+		//check the answer of PoW
 		combined := pow.Challenge.Salt + fmt.Sprintf("%d", pow.Challenge.Timestamp) + pow.Nonce
 		h := sha256.New()
 		h.Write([]byte(combined))
