@@ -2,13 +2,14 @@ package middleware
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"hashcash/internal/dto"
 	"hashcash/internal/server"
-	"math/rand"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -28,8 +29,12 @@ func New(secretKeyProvider SecretKeyProvider, tokenTtl time.Duration, challengeD
 }
 
 func (h hashCashMiddleware) generateChallengeResponse(ip string) ([]byte, error) {
+	salt, err := generateRandomSalt(16)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't generate salt, %v", err)
+	}
 	challenge := dto.ChallengeDto{
-		Salt:       generateRandomSalt(16),
+		Salt:       salt,
 		Timestamp:  time.Now().Unix(),
 		Difficulty: h.challengeDifficult,
 	}
@@ -127,11 +132,17 @@ func (h hashCashMiddleware) HashCashMiddleware(next server.MessageHandler) serve
 	}
 }
 
-func generateRandomSalt(n int) string {
+func generateRandomSalt(n int) (string, error) {
 	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+	length := len(letters)
+	bigint := big.NewInt(int64(length))
+	rand, err := rand.Int(rand.Reader, bigint)
+	if err != nil {
+		return "", err
 	}
-	return string(b)
+	for i := range b {
+		b[i] = letters[rand.Int64()]
+	}
+	return string(b), nil
 }
