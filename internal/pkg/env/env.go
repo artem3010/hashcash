@@ -1,16 +1,16 @@
 package env
 
 import (
-	"log"
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog/log"
 )
 
 func LoadEnv() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("No .env file found, using system environment variables")
+		log.Err(err).Msg("No .env file found, using system environment variables")
 	}
 }
 
