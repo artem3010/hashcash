@@ -11,7 +11,7 @@ import (
 
 func main() {
 	env.LoadEnv()
-	serverUrl := env.GetEnv("POW_SERVER_HOST", "")
+	serverUrl := env.GetEnv("POW_SERVER_HOST", "localhost")
 	serverPort := env.GetEnv("POW_SERVER_PORT", "8080")
 	clientPort := env.GetEnv("POW_CLIENT_PORT", "8081")
 	pingTimeout, err := time.ParseDuration(env.GetEnv("PING_TIMEOUT", "100ms"))

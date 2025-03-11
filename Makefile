@@ -3,6 +3,7 @@
 # Image names
 SERVER_IMAGE = hashcash-server
 CLIENT_IMAGE = hashcash-client
+NETWORK_NAME = hashcash_network  # Network name for the containers
 
 # Docker Compose file
 DOCKER_COMPOSE = docker-compose.yml
@@ -19,20 +20,24 @@ build:
 	@echo "Building client Docker image..."
 	docker build -f Dockerfile.client -t $(CLIENT_IMAGE) .
 
-# Run the server and client Docker images separately
+# Run the server and client Docker images separately with a shared network
 .PHONY: run
 run:
+	@echo "Creating Docker network..."
+	docker network create $(NETWORK_NAME)
 	@echo "Running the server container..."
-	docker run -d --name server -p 8080:8080 $(SERVER_IMAGE)
+	docker run -d --name server --network $(NETWORK_NAME) -p 8080:8080 $(SERVER_IMAGE)
 	@echo "Running the client container..."
-	docker run -d --name client -p 8081:8081 $(CLIENT_IMAGE)
+	docker run -d --name client --network $(NETWORK_NAME) -p 8081:8081 $(CLIENT_IMAGE)
 
-# Stop the containers
+# Stop the containers and remove the network
 .PHONY: stop
 stop:
 	@echo "Stopping and removing containers..."
 	docker stop client server
 	docker rm client server
+	@echo "Removing Docker network..."
+	docker network rm $(NETWORK_NAME)
 
 # Build and run with Docker Compose
 .PHONY: compose
